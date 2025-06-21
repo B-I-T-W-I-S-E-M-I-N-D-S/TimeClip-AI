@@ -1,4 +1,4 @@
-# time_clip
+# TimeClip AI
 
 A new Flutter project.
 
