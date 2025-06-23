@@ -7,13 +7,16 @@ class FloatingAppBar extends StatelessWidget {
   final String title;
   final int selectedIndex;
   final Function(int) onItemSelected;
+  final bool isLandingPage;
 
   const FloatingAppBar({
     Key? key,
     required this.title,
     required this.selectedIndex,
     required this.onItemSelected,
+    this.isLandingPage = false,
   }) : super(key: key);
+
 
   @override
   Widget build(BuildContext context) {
@@ -82,50 +85,43 @@ class FloatingAppBar extends StatelessWidget {
                     children: [
                       _buildNavItem('About', 0),
                       SizedBox(width: 40),
-                      _buildNavItem('Technologies', 1),
-                      SizedBox(width: 40),
-                      _buildNavItem('Products', 2),
-                      SizedBox(width: 40),
-                      _buildNavItem('Discover', 3),
+                      _buildNavItem('Technologies', 0),
                       SizedBox(width: 80),
                       _buildNavItem('Team', 4),
-                      SizedBox(width: 40),
-                      _buildNavItem('Pricing', 5),
-                      SizedBox(width: 40),
-                      _buildNavItem('Buy Premium', 6),
                     ],
                   ),
 
                   SizedBox(width: 40),
 
                   // Get Started button - matching the purple gradient
-                  Container(
-                    height: 44,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        // Handle get started action
-                        print('Get Started pressed');
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Color(0xFF8B5CF6), // Purple to match image
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(22),
+                  if (isLandingPage)
+                    Container(
+                      height: 44,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          print('Get Started pressed');
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Color(0xFF8B5CF6),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(22),
+                          ),
+                          elevation: 0,
+                          padding: EdgeInsets.symmetric(horizontal: 24),
+                          shadowColor: Colors.transparent,
                         ),
-                        elevation: 0,
-                        padding: EdgeInsets.symmetric(horizontal: 24),
-                        shadowColor: Colors.transparent,
-                      ),
-                      child: Text(
-                        'Get Started',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: -0.2,
+                        child: Text(
+                          'Get Started',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: -0.2,
+                          ),
                         ),
                       ),
                     ),
-                  ),
+
                 ],
               ),
             ),

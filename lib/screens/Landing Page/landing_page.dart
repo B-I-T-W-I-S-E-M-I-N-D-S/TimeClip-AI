@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:simple_gradient_text/simple_gradient_text.dart';
 import 'dart:ui';
 import '../Common/widgets/Appbar.dart';
+import '../home/home.dart';
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key, required this.title});
@@ -122,22 +123,38 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                     ),
                     ElevatedButton(
-                      onPressed: () {},
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          PageRouteBuilder(
+                            transitionDuration: Duration(milliseconds: 500),
+                            pageBuilder: (_, __, ___) => Home(),
+                            transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                              return FadeTransition(
+                                opacity: animation,
+                                child: child,
+                              );
+                            },
+                          ),
+                        );
+
+                      },
                       style: ElevatedButton.styleFrom(
                         foregroundColor: Colors.black,
-                        backgroundColor: Colors.white, // Button background color
-                        elevation: 2, // Shadow elevation
+                        backgroundColor: Colors.white,
+                        elevation: 2,
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10), // Rounded corners
+                          borderRadius: BorderRadius.circular(10),
                         ),
-                        minimumSize: Size(150, 50), // Button size
+                        minimumSize: Size(150, 50),
                         padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                       ),
                       child: Text(
                         'Start for Free',
-                        style: TextStyle(fontSize: 16,fontWeight: FontWeight.w500),
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
                       ),
                     ),
+
                   ],
                 ),
               ],
@@ -157,6 +174,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   selectedIndex = index;
                 });
               },
+              isLandingPage: true,
             ),
           ),
         ],
