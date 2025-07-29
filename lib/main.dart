@@ -5,12 +5,12 @@ import 'package:window_manager/window_manager.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await windowManager.ensureInitialized();
+  //await windowManager.ensureInitialized();
   MediaKit.ensureInitialized();
 
   // Set the minimum window size
-  const minSize = Size(1600, 1000); // Example: 800x600 pixels
-  await windowManager.setMinimumSize(minSize);
+  // const minSize = Size(1600, 1000); // Example: 800x600 pixels
+  // await windowManager.setMinimumSize(minSize);
   runApp(const MyApp());
 }
 

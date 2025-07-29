@@ -1,6 +1,8 @@
-
+import 'dart:io';
+import 'dart:math';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:parallax_rain/parallax_rain.dart';
 import 'package:simple_gradient_text/simple_gradient_text.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -8,13 +10,13 @@ import 'package:timeline_tile/timeline_tile.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:ui';
-import 'dart:io';
+import 'dart:async';
 import '../Common/widgets/Appbar.dart';
 import '../home/home.dart';
 
 class Analytics extends StatefulWidget {
   final String? videoPath;
-  final String? apiEndpoint; // Add API endpoint parameter
+  final String? apiEndpoint;
 
   const Analytics({super.key, this.videoPath, this.apiEndpoint});
 
@@ -23,116 +25,120 @@ class Analytics extends StatefulWidget {
 }
 
 class _AnalyticsState extends State<Analytics> {
-  int selectedIndex = -1;
-  String? selectedActionFilter; // For filtering timeline by action class
-
-  // Video player components
+  int selectedIndex = 1; // Default to Analytics
+  String? selectedActionFilter;
   late final Player player;
   late final VideoController controller;
   bool isVideoLoaded = false;
   bool isVideoLoading = true;
   String? videoErrorMessage;
-
-  // API data components
+  String? videoStreamUrl;
   List<Map<String, dynamic>> timelineData = [];
   bool isApiLoading = true;
   String? apiErrorMessage;
+  Timer? _pollingTimer;
+  String? _videoTaskId;
+
+  final Map<String, Color> _actionColorCache = {};
+  final List<Color> _colors = [
+    Colors.blue,
+    Colors.green,
+    Colors.red,
+    Colors.orange,
+    Colors.purple,
+    Colors.deepOrange,
+    Colors.teal,
+    Colors.pink,
+    Colors.amber,
+    Colors.cyan,
+  ];
 
   @override
   void initState() {
     super.initState();
-    // Initialize video player
     player = Player();
     controller = VideoController(player);
 
-    // Listen to player state changes
     player.stream.buffering.listen((buffering) {
       if (mounted) {
-        setState(() {
-          // Update UI based on buffering state if needed
-        });
+        setState(() {});
       }
     });
 
-    // Load video if path is provided
     if (widget.videoPath != null) {
-      _loadVideoFromPath(widget.videoPath!);
+      _fetchTimelineData();
     } else {
       setState(() {
         isVideoLoading = false;
         videoErrorMessage = 'No video path provided';
       });
     }
-
-    // Fetch timeline data from API
-    _fetchTimelineData();
   }
 
   @override
   void dispose() {
+    _pollingTimer?.cancel();
     player.dispose();
     super.dispose();
   }
 
-  // Fetch timeline data from API
+  // Fetch timeline data
   Future<void> _fetchTimelineData() async {
     try {
       setState(() {
         isApiLoading = true;
         apiErrorMessage = null;
+        _actionColorCache.clear();
       });
 
-      // Use provided API endpoint or default
-      final String apiUrl = widget.apiEndpoint ?? 'https://c315-34-139-115-168.ngrok-free.app/predict';
-      String? videoName = widget.videoPath?.split('\\').last.split('.').first;
+      final String apiUrl = '${widget.apiEndpoint ?? 'https://c315-34-139-115-168.ngrok-free.app'}/predict';
+      String? videoName = widget.videoPath?.split(Platform.pathSeparator).last.split('.').first;
 
       final response = await http.post(
         Uri.parse(apiUrl),
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           "video_path": "./data/I3D/$videoName.mp4",
           "video_name": videoName
         }),
       ).timeout(
-        const Duration(seconds: 200), // 200 second timeout
+        const Duration(seconds: 200),
         onTimeout: () {
           throw Exception('Request timeout - API took too long to respond');
         },
       );
+
       if (response.statusCode == 200) {
         final Map<String, dynamic> jsonData = json.decode(response.body);
+        _videoTaskId = jsonData['video_task_id']?.toString();
+        if (_videoTaskId != null) {
+          _pollTaskStatus(widget.apiEndpoint, _videoTaskId!);
+        } else {
+          setState(() {
+            isVideoLoading = false;
+            videoErrorMessage = 'No video_task_id found in API response';
+          });
+        }
 
-        // Handle different possible API response structures
         List<dynamic> apiTimelineData;
-
         if (jsonData.containsKey('data')) {
-          // If API returns {data: [...], status: "success", etc.}
           apiTimelineData = jsonData['data'];
         } else if (jsonData.containsKey('timeline')) {
-          // If API returns {timeline: [...], etc.}
           apiTimelineData = jsonData['timeline'];
         } else if (jsonData.containsKey('actions')) {
-          // If API returns {actions: [...], etc.}
           apiTimelineData = jsonData['actions'];
         } else if (jsonData is List) {
-          // If API returns array directly
           apiTimelineData = jsonData as List;
         } else {
-          // Try to find the first array in the response
           apiTimelineData = jsonData.values.firstWhere(
                 (value) => value is List,
             orElse: () => [],
           );
         }
 
-        // Validate and parse the timeline data
         final List<Map<String, dynamic>> parsedData = [];
-
         for (var item in apiTimelineData) {
           if (item is Map<String, dynamic>) {
-            // Ensure all required fields exist with fallback values
             final parsedItem = {
               'label': item['label']?.toString() ?? item['action']?.toString() ?? item['class']?.toString() ?? 'Unknown',
               'start': _parseDouble(item['start'] ?? item['start_time'] ?? item['startTime'] ?? 0),
@@ -140,12 +146,6 @@ class _AnalyticsState extends State<Analytics> {
               'duration': _parseDouble(item['duration'] ?? 0),
               'score': _parseDouble(item['score'] ?? item['confidence'] ?? item['probability'] ?? 0),
             };
-
-            // Calculate duration if not provided
-            // if (parsedItem['duration'] == 0 && parsedItem['end']! > parsedItem['start']) {
-            //   parsedItem['duration'] = (parsedItem['end'] - parsedItem['start'])!;
-            // }
-
             parsedData.add(parsedItem);
           }
         }
@@ -165,14 +165,80 @@ class _AnalyticsState extends State<Analytics> {
         setState(() {
           isApiLoading = false;
           apiErrorMessage = 'Error loading timeline data: ${e.toString()}';
-          // Optionally load fallback data
           _loadFallbackData();
         });
       }
     }
   }
 
-  // Helper method to safely parse double values
+  // Poll task status
+  Future<void> _pollTaskStatus(String? baseUrl, String videoTaskId) async {
+    const Duration pollInterval = Duration(seconds: 5);
+    const int maxAttempts = 60;
+    int attempts = 0;
+
+    _pollingTimer?.cancel();
+    _pollingTimer = Timer.periodic(pollInterval, (timer) async {
+      if (!mounted || attempts >= maxAttempts) {
+        timer.cancel();
+        if (mounted) {
+          setState(() {
+            isVideoLoading = false;
+            videoErrorMessage = 'Video generation timed out after ${maxAttempts * pollInterval.inSeconds}s';
+          });
+        }
+        return;
+      }
+
+      try {
+        final response = await http.get(
+          Uri.parse('$baseUrl/task_status/$videoTaskId'),
+          headers: {'Content-Type': 'application/json'},
+        ).timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            throw Exception('Task status request timeout');
+          },
+        );
+
+        if (response.statusCode == 200) {
+          final jsonData = json.decode(response.body);
+          final String status = jsonData['status']?.toString() ?? 'unknown';
+          final String? videoStreamUrlFromApi = jsonData['video_stream_url']?.toString();
+
+          if (status == 'completed' && videoStreamUrlFromApi != null) {
+            timer.cancel();
+            setState(() {
+              videoStreamUrl = videoStreamUrlFromApi;
+              _loadVideoFromUrl(videoStreamUrl!);
+            });
+          } else if (status == 'failed') {
+            timer.cancel();
+            setState(() {
+              isVideoLoading = false;
+              videoErrorMessage = jsonData['error']?.toString() ?? 'Video generation failed';
+            });
+          }
+        } else {
+          throw Exception('Failed to fetch task status: ${response.statusCode}');
+        }
+      } catch (e) {
+        print('Error polling task status: $e');
+        attempts++;
+        if (attempts >= maxAttempts) {
+          timer.cancel();
+          if (mounted) {
+            setState(() {
+              isVideoLoading = false;
+              videoErrorMessage = 'Error polling task status: $e';
+            });
+          }
+        }
+      }
+    });
+  }
+
+  // Parse double values
   double _parseDouble(dynamic value) {
     if (value is double) return value;
     if (value is int) return value.toDouble();
@@ -182,7 +248,7 @@ class _AnalyticsState extends State<Analytics> {
     return 0.0;
   }
 
-  // Load fallback data if API fails
+  // Load fallback data
   void _loadFallbackData() {
     timelineData = [
       {
@@ -214,12 +280,12 @@ class _AnalyticsState extends State<Analytics> {
     _fetchTimelineData();
   }
 
-  // Get unique action classes for chips
+  // Get unique action classes
   List<String> get uniqueActionClasses {
     return timelineData.map((item) => item['label'] as String).toSet().toList();
   }
 
-  // Get filtered timeline data based on selected action
+  // Get filtered timeline data
   List<Map<String, dynamic>> get filteredTimelineData {
     if (selectedActionFilter == null) {
       return timelineData;
@@ -227,71 +293,54 @@ class _AnalyticsState extends State<Analytics> {
     return timelineData.where((item) => item['label'] == selectedActionFilter).toList();
   }
 
-  // Method to load video from specific path
-  Future<void> _loadVideoFromPath(String filePath) async {
+  // Load video from URL
+  Future<void> _loadVideoFromUrl(String url) async {
     try {
       setState(() {
         isVideoLoading = true;
         videoErrorMessage = null;
       });
 
-      final file = File(filePath);
-      if (await file.exists()) {
-        await player.open(Media('file:///$filePath'));
+      await player.open(Media(url), play: true);
 
-        if (mounted) {
-          setState(() {
-            isVideoLoaded = true;
-            isVideoLoading = false;
-          });
-        }
-      } else {
-        if (mounted) {
-          setState(() {
-            isVideoLoading = false;
-            videoErrorMessage = 'Video file not found at: $filePath';
-          });
-        }
+      if (mounted) {
+        setState(() {
+          isVideoLoaded = true;
+          isVideoLoading = false;
+        });
       }
     } catch (e) {
       print('Error loading video: $e');
       if (mounted) {
         setState(() {
           isVideoLoading = false;
+          isVideoLoaded = false;
           videoErrorMessage = 'Error loading video: $e';
         });
       }
     }
   }
 
-  // Retry loading video
+  // Retry video loading
   void _retryVideoLoading() {
-    if (widget.videoPath != null) {
-      _loadVideoFromPath(widget.videoPath!);
+    if (_videoTaskId != null) {
+      _pollTaskStatus(widget.apiEndpoint, _videoTaskId!);
+    } else if (widget.videoPath != null) {
+      _fetchTimelineData();
     }
   }
 
-  // Get color for different action labels
+  // Get action color
   Color _getActionColor(String label) {
-    switch (label.toLowerCase()) {
-      case 'open':
-        return Colors.blue;
-      case 'take':
-        return Colors.green;
-      case 'cut':
-        return Colors.red;
-      case 'close':
-        return Colors.orange;
-      case 'slicing':
-        return Colors.purple;
-      case 'cooking':
-        return Colors.deepOrange;
-      default:
-        return Colors.grey;
+    if (_actionColorCache.containsKey(label)) {
+      return _actionColorCache[label]!;
     }
+    final color = _colors[Random().nextInt(_colors.length)];
+    _actionColorCache[label] = color;
+    return color;
   }
 
-  // Format timestamp to readable format
+  // Format timestamp
   String _formatTimestamp(double timestamp) {
     int minutes = (timestamp / 60).floor();
     int seconds = (timestamp % 60).floor();
@@ -301,108 +350,174 @@ class _AnalyticsState extends State<Analytics> {
 
   @override
   Widget build(BuildContext context) {
+    final Size screenSize = MediaQuery.of(context).size;
+    final bool isLargeScreen = screenSize.width > 800;
+    final double padding = screenSize.width * 0.05;
+    const double videoAspectRatio = 16 / 9;
+
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          // Background gradient
-          Positioned(
-            top: 20,
-            left: 20,
-            right: 20,
-            child: Image.asset('assets/Back light.png'),
-          ),
-          // Main content
-          Padding(
-            padding: const EdgeInsets.only(top: 100.0, left: 70.0, right: 70.0),
-            child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+      body: ParallaxRain(
+        dropColors: const [Colors.white],
+        dropHeight: 2,
+        dropWidth: 0.5,
+        dropFallSpeed: 0.5,
+        child: Stack(
+          children: [
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Image.asset(
+                'assets/Back light.png',
+                width: screenSize.width,
+                fit: BoxFit.cover,
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: padding,
+                vertical: screenSize.height * 0.05,
+              ),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        FloatingAppBar(
+                          title: 'TimeClip AI - Analytics',
+                          selectedIndex: selectedIndex,
+                          onItemSelected: (index) {
+                            setState(() {
+                              selectedIndex = index;
+                            });
+                          },
+                          isLandingPage: false,
+                          videoPath: widget.videoPath,
+                        ),
+                        SizedBox(height: screenSize.height * 0.02),
+                        isLargeScreen
+                            ? _buildLargeScreenLayout(context, screenSize, videoAspectRatio)
+                            : _buildSmallScreenLayout(context, screenSize, videoAspectRatio),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Large screen layout
+  Widget _buildLargeScreenLayout(BuildContext context, Size screenSize, double videoAspectRatio) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          flex: 3,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "Here's the Predicted Action Classes from your Video...",
+                style: TextStyle(
+                  fontSize: screenSize.width * 0.03,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+                textAlign: TextAlign.start,
+              ),
+              SizedBox(height: screenSize.height * 0.02),
+              if (isApiLoading)
+                _buildApiLoadingWidget()
+              else if (apiErrorMessage != null)
+                _buildApiErrorWidget()
+              else
+                _buildFilterChips(),
+              SizedBox(height: screenSize.height * 0.03),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Video container
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            width: 850,
-                            child: Text(
-                              "Here's the Predicted Action Classes from your Video...",
-                              style: TextStyle(
-                                fontSize: 40,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                              textAlign: TextAlign.start,
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-
-                          // Show loading or error state for API
-                          if (isApiLoading)
-                            _buildApiLoadingWidget()
-                          else if (apiErrorMessage != null)
-                            _buildApiErrorWidget()
-                          else
-                            _buildFilterChips(),
-
-                          const SizedBox(height: 30),
-                          // Timeline section
-                          Container(
-                            width: 850,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                _buildTimelineHeader(),
-                                const SizedBox(height: 20),
-                                _buildTimelineContent(),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      Column(
-                        children: [
-                          Container(
-                            width: 500,
-                            height: 300,
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: _buildVideoContent(),
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          // Video info and controls
-                          _buildVideoInfo(),
-                        ],
-                      ),
-                    ],
+                  _buildTimelineHeader(),
+                  SizedBox(height: screenSize.height * 0.02),
+                  SizedBox(
+                    height: screenSize.height * 0.5,
+                    child: _buildTimelineContent(),
                   ),
                 ],
               ),
-            ),
+            ],
           ),
-          // Floating AppBar
-          Positioned(
-            top: 20,
-            left: 20,
-            right: 20,
-            child: FloatingAppBar(
-              title: 'TimeClip AI - Analytics',
-              selectedIndex: selectedIndex,
-              onItemSelected: (index) {
-                setState(() {
-                  selectedIndex = index;
-                });
-              },
-              isLandingPage: false,
-            ),
+        ),
+        SizedBox(width: screenSize.width * 0.03),
+        Expanded(
+          flex: 2,
+          child: Column(
+            children: [
+              AspectRatio(
+                aspectRatio: videoAspectRatio,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: _buildVideoContent(),
+                ),
+              ),
+              SizedBox(height: screenSize.height * 0.02),
+              _buildVideoInfo(),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
+    );
+  }
+
+  // Small screen layout
+  Widget _buildSmallScreenLayout(BuildContext context, Size screenSize, double videoAspectRatio) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          "Here's the Predicted Action Classes from your Video...",
+          style: TextStyle(
+            fontSize: screenSize.width * 0.05,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+          textAlign: TextAlign.start,
+        ),
+        SizedBox(height: screenSize.height * 0.02),
+        AspectRatio(
+          aspectRatio: videoAspectRatio,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: _buildVideoContent(),
+          ),
+        ),
+        SizedBox(height: screenSize.height * 0.02),
+        _buildVideoInfo(),
+        SizedBox(height: screenSize.height * 0.03),
+        if (isApiLoading)
+          _buildApiLoadingWidget()
+        else if (apiErrorMessage != null)
+          _buildApiErrorWidget()
+        else
+          _buildFilterChips(),
+        SizedBox(height: screenSize.height * 0.03),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildTimelineHeader(),
+            SizedBox(height: screenSize.height * 0.02),
+            SizedBox(
+              height: screenSize.height * 0.5,
+              child: _buildTimelineContent(),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -418,7 +533,7 @@ class _AnalyticsState extends State<Analytics> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          SizedBox(
+          const SizedBox(
             width: 20,
             height: 20,
             child: CircularProgressIndicator(
@@ -482,12 +597,12 @@ class _AnalyticsState extends State<Analytics> {
             children: [
               ElevatedButton.icon(
                 onPressed: _retryApiCall,
-                icon: Icon(Icons.refresh, size: 16),
-                label: Text('Retry API Call'),
+                icon: const Icon(Icons.refresh, size: 16),
+                label: const Text('Retry API Call'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.red[400],
                   foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 ),
               ),
               if (timelineData.isNotEmpty) ...[
@@ -509,16 +624,14 @@ class _AnalyticsState extends State<Analytics> {
 
   // Build filter chips
   Widget _buildFilterChips() {
-    return Container(
-      width: 850,
-      child: Wrap(
-        spacing: 10,
-        runSpacing: 10,
-        children: [
-          _buildFilterChip('All'),
-          ...uniqueActionClasses.map((action) => _buildFilterChip(action)).toList(),
-        ],
-      ),
+    final Size screenSize = MediaQuery.of(context).size;
+    return Wrap(
+      spacing: screenSize.width * 0.02,
+      runSpacing: screenSize.height * 0.01,
+      children: [
+        _buildFilterChip('All'),
+        ...uniqueActionClasses.map((action) => _buildFilterChip(action)).toList(),
+      ],
     );
   }
 
@@ -526,7 +639,7 @@ class _AnalyticsState extends State<Analytics> {
   Widget _buildTimelineHeader() {
     return Row(
       children: [
-        Text(
+        const Text(
           'Action Timeline',
           style: TextStyle(
             fontSize: 24,
@@ -569,35 +682,6 @@ class _AnalyticsState extends State<Analytics> {
             ),
           ),
         const Spacer(),
-        // API status indicator
-        if (timelineData.isNotEmpty)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.green[900]!.withOpacity(0.3),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.green.withOpacity(0.5)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.cloud_done,
-                  color: Colors.green[400],
-                  size: 16,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  'API Data (${timelineData.length})',
-                  style: TextStyle(
-                    color: Colors.green[400],
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-          ),
       ],
     );
   }
@@ -611,7 +695,7 @@ class _AnalyticsState extends State<Analytics> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              CircularProgressIndicator(
+              const CircularProgressIndicator(
                 valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
               ),
               const SizedBox(height: 16),
@@ -631,7 +715,7 @@ class _AnalyticsState extends State<Analytics> {
     return _buildTimeline();
   }
 
-  // Build the timeline widget (existing method, unchanged)
+  // Build timeline
   Widget _buildTimeline() {
     final dataToShow = filteredTimelineData;
 
@@ -829,7 +913,7 @@ class _AnalyticsState extends State<Analytics> {
     );
   }
 
-  // Get icon for different action labels
+  // Get action icon
   IconData _getActionIcon(String label) {
     switch (label.toLowerCase()) {
       case 'open':
@@ -849,7 +933,7 @@ class _AnalyticsState extends State<Analytics> {
     }
   }
 
-  // Build video content based on current state
+  // Build video content
   Widget _buildVideoContent() {
     if (isVideoLoading) {
       return _buildLoadingPlaceholder();
@@ -888,7 +972,7 @@ class _AnalyticsState extends State<Analytics> {
           ),
           const SizedBox(height: 16),
           GradientText(
-            'Loading Video...',
+            'Generating Video...',
             style: const TextStyle(
               fontSize: 24,
               fontWeight: FontWeight.bold,
@@ -899,9 +983,18 @@ class _AnalyticsState extends State<Analytics> {
             ],
           ),
           const SizedBox(height: 8),
-          if (widget.videoPath != null)
+          if (videoStreamUrl != null)
             Text(
-              'Loading: ${widget.videoPath!.split('\\').last}',
+              'Loading: ${videoStreamUrl!.split('/').last}',
+              style: TextStyle(
+                color: Colors.grey[500],
+                fontSize: 14,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          if (_videoTaskId != null)
+            Text(
+              'Task ID: $_videoTaskId',
               style: TextStyle(
                 color: Colors.grey[500],
                 fontSize: 14,
@@ -977,7 +1070,7 @@ class _AnalyticsState extends State<Analytics> {
     );
   }
 
-  // Build video placeholder when no video is loaded
+  // Build video placeholder
   Widget _buildVideoPlaceholder() {
     return Container(
       width: double.infinity,
@@ -1014,7 +1107,7 @@ class _AnalyticsState extends State<Analytics> {
           ),
           const SizedBox(height: 8),
           Text(
-            'No video path was provided',
+            'No video stream URL provided',
             style: TextStyle(
               color: Colors.grey[500],
               fontSize: 14,
@@ -1026,9 +1119,9 @@ class _AnalyticsState extends State<Analytics> {
     );
   }
 
-  // Build video info section
+  // Build video info
   Widget _buildVideoInfo() {
-    if (widget.videoPath == null) return const SizedBox.shrink();
+    if (videoStreamUrl == null && widget.videoPath == null) return const SizedBox.shrink();
 
     return Container(
       width: 500,
@@ -1053,7 +1146,7 @@ class _AnalyticsState extends State<Analytics> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Video: ${widget.videoPath!.split('\\').last}',
+                  'Video: ${videoStreamUrl?.split('/').last ?? widget.videoPath!.split(Platform.pathSeparator).last}',
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 16,
@@ -1075,7 +1168,7 @@ class _AnalyticsState extends State<Analytics> {
               ),
               const SizedBox(width: 8),
               Text(
-                isVideoLoaded ? 'Video loaded successfully' : 'Loading video...',
+                isVideoLoaded ? 'Video loaded successfully' : 'Waiting for video generation...',
                 style: TextStyle(
                   color: Colors.grey[400],
                   fontSize: 12,
@@ -1083,40 +1176,34 @@ class _AnalyticsState extends State<Analytics> {
               ),
             ],
           ),
+          if (_videoTaskId != null) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(
+                  Icons.info_outline,
+                  color: Colors.blue[400],
+                  size: 16,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Task ID: $_videoTaskId',
+                  style: TextStyle(
+                    color: Colors.grey[400],
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildChip(String label) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20), // Rounded shape
-      ),
-      child: Center(
-        child: Chip(
-          label: Text(
-            label,
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w500,
-                height: 1.2),
-          ),
-          backgroundColor: Color(0xff5A1E96), // Remove default chip background
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: BorderSide(color: Colors.white), // Optional: subtle border
-          ),
-        ),
-      ),
-    );
-  }
-
-  // Build filter chip with selection functionality
+  // Build filter chip
   Widget _buildFilterChip(String label) {
-    final bool isSelected = (label == 'All' && selectedActionFilter == null) ||
-        (selectedActionFilter == label);
+    final bool isSelected = (label == 'All' && selectedActionFilter == null) || (selectedActionFilter == label);
     final bool isAllOption = label == 'All';
 
     return GestureDetector(
@@ -1133,13 +1220,15 @@ class _AnalyticsState extends State<Analytics> {
         duration: const Duration(milliseconds: 200),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(20),
-          boxShadow: isSelected ? [
+          boxShadow: isSelected
+              ? [
             BoxShadow(
               color: (isAllOption ? Colors.blue : _getActionColor(label)).withOpacity(0.3),
               blurRadius: 8,
               spreadRadius: 2,
             ),
-          ] : [],
+          ]
+              : [],
         ),
         child: Chip(
           label: Text(
