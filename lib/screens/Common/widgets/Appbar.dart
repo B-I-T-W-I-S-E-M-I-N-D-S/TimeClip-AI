@@ -87,7 +87,7 @@ class _FloatingAppBarState extends State<FloatingAppBar> {
   // Submit endpoint
   void _submitEndpoint() {
     if (isEndpointValid) {
-      final endpoint = _endpointController.text.trim();
+      final String endpoint = _endpointController.text.trim().replaceAll(RegExp(r'/*$'), '');
       setState(() {
         apiEndpoint = endpoint;
         showEndpointInput = false;

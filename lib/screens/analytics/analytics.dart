@@ -38,6 +38,8 @@ class _AnalyticsState extends State<Analytics> {
   String? apiErrorMessage;
   Timer? _pollingTimer;
   String? _videoTaskId;
+  final ScrollController _timelineScrollController = ScrollController();
+
 
   final Map<String, Color> _actionColorCache = {};
   final List<Color> _colors = [
@@ -57,6 +59,7 @@ class _AnalyticsState extends State<Analytics> {
   void initState() {
     super.initState();
     player = Player();
+    _timelineScrollController.dispose();
     controller = VideoController(player);
 
     player.stream.buffering.listen((buffering) {
@@ -91,14 +94,14 @@ class _AnalyticsState extends State<Analytics> {
         _actionColorCache.clear();
       });
 
-      final String apiUrl = '${widget.apiEndpoint ?? 'https://c315-34-139-115-168.ngrok-free.app'}/predict';
+      final String apiUrl = '${widget.apiEndpoint ?? 'https://c315-34-139-115-168.ngrok-free.app/'}/predict';
       String? videoName = widget.videoPath?.split(Platform.pathSeparator).last.split('.').first;
 
       final response = await http.post(
         Uri.parse(apiUrl),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          "video_path": "./data/I3D/$videoName.mp4",
+          "video_path": "./data/Test/$videoName.mp4",//
           "video_name": videoName
         }),
       ).timeout(
@@ -170,6 +173,26 @@ class _AnalyticsState extends State<Analytics> {
       }
     }
   }
+
+  List<String> get alphabeticallySortedActions {
+    return uniqueActionClasses..sort();
+  }
+  void _scrollToAction(String action) {
+    final dataToShow = filteredTimelineData;
+    final index = dataToShow.indexWhere((item) => item['label'] == action);
+
+    if (index != -1) {
+      // Calculate approximate position (each timeline item is roughly 120px height)
+      final double position = index * 120.0;
+      _timelineScrollController.animateTo(
+        position,
+        duration: const Duration(milliseconds: 500),
+        curve: Curves.easeInOut,
+      );
+    }
+  }
+
+
 
   // Poll task status
   Future<void> _pollTaskStatus(String? baseUrl, String videoTaskId) async {
@@ -712,9 +735,108 @@ class _AnalyticsState extends State<Analytics> {
       );
     }
 
-    return _buildTimeline();
+    return Row(
+      children: [
+        Expanded(
+          child: _buildTimeline(),
+        ),
+        const SizedBox(width: 8),
+        _buildTimelineSidebar(),
+      ],
+    );
   }
 
+  Widget _buildTimelineSidebar() {
+    final dataToShow = filteredTimelineData;
+    if (dataToShow.isEmpty) return const SizedBox.shrink();
+
+    final sortedActions = alphabeticallySortedActions;
+
+    return Container(
+      width: 40,
+      height: 400,
+      decoration: BoxDecoration(
+        color: Colors.grey[900]!.withOpacity(0.7),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.grey[700]!, width: 1),
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Icon(
+              Icons.list,
+              color: Colors.grey[400],
+              size: 16,
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              itemCount: sortedActions.length,
+              itemBuilder: (context, index) {
+                final action = sortedActions[index];
+                final actionColor = _getActionColor(action);
+                final isFiltered = selectedActionFilter == action;
+
+                return GestureDetector(
+                  onTap: () => _scrollToAction(action),
+                  child: Container(
+                    height: 32,
+                    margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: isFiltered
+                          ? actionColor.withOpacity(0.3)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                      border: isFiltered
+                          ? Border.all(color: actionColor, width: 1)
+                          : null,
+                    ),
+                    child: Center(
+                      child: Text(
+                        action.substring(0, 1).toUpperCase(),
+                        style: TextStyle(
+                          color: isFiltered ? actionColor : Colors.grey[400],
+                          fontSize: 14,
+                          fontWeight: isFiltered ? FontWeight.bold : FontWeight.normal,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: GestureDetector(
+              onTap: () {
+                _timelineScrollController.animateTo(
+                  0,
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                );
+              },
+              child: Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.blue.withOpacity(0.5)),
+                ),
+                child: Icon(
+                  Icons.keyboard_arrow_up,
+                  color: Colors.blue[400],
+                  size: 16,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
   // Build timeline
   Widget _buildTimeline() {
     final dataToShow = filteredTimelineData;
@@ -776,142 +898,150 @@ class _AnalyticsState extends State<Analytics> {
 
     return Container(
       height: 400,
-      child: ListView.builder(
-        itemCount: dataToShow.length,
-        itemBuilder: (context, index) {
-          final item = dataToShow[index];
-          final isFirst = index == 0;
-          final isLast = index == dataToShow.length - 1;
+      child: Scrollbar(
+        controller: _timelineScrollController,
+        thumbVisibility: true,
+        thickness: 8,
+        radius: const Radius.circular(4),
+        child: ListView.builder(
+          controller: _timelineScrollController,
+          itemCount: dataToShow.length,
+          itemBuilder: (context, index) {
+            final item = dataToShow[index];
+            final isFirst = index == 0;
+            final isLast = index == dataToShow.length - 1;
 
-          return TimelineTile(
-            alignment: TimelineAlign.start,
-            isFirst: isFirst,
-            isLast: isLast,
-            indicatorStyle: IndicatorStyle(
-              width: 24,
-              height: 24,
-              indicator: Container(
+            return TimelineTile(
+              alignment: TimelineAlign.start,
+              isFirst: isFirst,
+              isLast: isLast,
+              indicatorStyle: IndicatorStyle(
+                width: 24,
+                height: 24,
+                indicator: Container(
+                  decoration: BoxDecoration(
+                    color: _getActionColor(item['label']),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 2),
+                  ),
+                  child: Icon(
+                    _getActionIcon(item['label']),
+                    color: Colors.white,
+                    size: 12,
+                  ),
+                ),
+              ),
+              beforeLineStyle: LineStyle(
+                color: Colors.grey[600]!,
+                thickness: 2,
+              ),
+              endChild: Container(
+                margin: const EdgeInsets.only(left: 16, bottom: 16),
+                padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: _getActionColor(item['label']),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
+                  color: Colors.grey[900]!.withOpacity(0.7),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: _getActionColor(item['label']).withOpacity(0.5),
+                    width: 1,
+                  ),
                 ),
-                child: Icon(
-                  _getActionIcon(item['label']),
-                  color: Colors.white,
-                  size: 12,
-                ),
-              ),
-            ),
-            beforeLineStyle: LineStyle(
-              color: Colors.grey[600]!,
-              thickness: 2,
-            ),
-            endChild: Container(
-              margin: const EdgeInsets.only(left: 16, bottom: 16),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.grey[900]!.withOpacity(0.7),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: _getActionColor(item['label']).withOpacity(0.5),
-                  width: 1,
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: _getActionColor(item['label']),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          item['label'],
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: _getActionColor(item['label']),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            item['label'],
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
-                      ),
-                      const Spacer(),
-                      Text(
-                        'Score: ${(item['score'] * 100).toStringAsFixed(1)}%',
-                        style: TextStyle(
-                          color: Colors.grey[400],
-                          fontSize: 12,
+                        const Spacer(),
+                        Text(
+                          'Score: ${(item['score'] * 100).toStringAsFixed(1)}%',
+                          style: TextStyle(
+                            color: Colors.grey[400],
+                            fontSize: 12,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.play_arrow,
-                        color: Colors.green[400],
-                        size: 16,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        'Start: ${_formatTimestamp(item['start'])}',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.play_arrow,
+                          color: Colors.green[400],
+                          size: 16,
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.stop,
-                        color: Colors.red[400],
-                        size: 16,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        'End: ${_formatTimestamp(item['end'])}',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
+                        const SizedBox(width: 4),
+                        Text(
+                          'Start: ${_formatTimestamp(item['start'])}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.timer,
-                        color: Colors.blue[400],
-                        size: 16,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        'Duration: ${item['duration'].toStringAsFixed(2)}s',
-                        style: TextStyle(
-                          color: Colors.grey[300],
-                          fontSize: 12,
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.stop,
+                          color: Colors.red[400],
+                          size: 16,
                         ),
-                      ),
-                    ],
-                  ),
-                ],
+                        const SizedBox(width: 4),
+                        Text(
+                          'End: ${_formatTimestamp(item['end'])}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.timer,
+                          color: Colors.blue[400],
+                          size: 16,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Duration: ${item['duration'].toStringAsFixed(2)}s',
+                          style: TextStyle(
+                            color: Colors.grey[300],
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
+
 
   // Get action icon
   IconData _getActionIcon(String label) {
