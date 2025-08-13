@@ -17,7 +17,7 @@ class Home extends StatefulWidget {
   State<Home> createState() => _HomeState();
 }
 
-class _HomeState extends State<Home> {
+class _HomeState extends State<Home> with WidgetsBindingObserver {
   int selectedIndex = 0; // Default to Home
   late final Player player;
   late final VideoController controller;
@@ -28,6 +28,7 @@ class _HomeState extends State<Home> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     player = Player();
     controller = VideoController(player);
 
@@ -40,8 +41,35 @@ class _HomeState extends State<Home> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     player.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Pause video when app goes to background
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      if (isVideoLoaded && player.state.playing) {
+        player.pause();
+      }
+    }
+  }
+
+  // Stop video playback
+  void _stopVideoPlayback() {
+    if (isVideoLoaded && player.state.playing) {
+      player.pause();
+    }
+  }
+
+  // Check if all requirements are met for navigation
+  bool get canNavigateToAnalytics {
+    return isVideoLoaded &&
+        currentVideoPath != null &&
+        currentVideoPath!.isNotEmpty &&
+        apiEndpoint != null &&
+        apiEndpoint!.isNotEmpty;
   }
 
   // Pick and load video file
@@ -61,6 +89,9 @@ class _HomeState extends State<Home> {
           isVideoLoaded = true;
           print('Video loaded: $currentVideoPath, isVideoLoaded: $isVideoLoaded');
         });
+
+        // Show success message
+        _showSuccessSnackBar('Video loaded successfully!');
       }
     } catch (e) {
       print('Error picking video file: $e');
@@ -81,6 +112,7 @@ class _HomeState extends State<Home> {
           isVideoLoaded = true;
           print('Video loaded: $currentVideoPath, isVideoLoaded: $isVideoLoaded');
         });
+        _showSuccessSnackBar('Video loaded successfully!');
       } else {
         _showErrorDialog('Video file not found at: $filePath');
       }
@@ -95,14 +127,62 @@ class _HomeState extends State<Home> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Error'),
-        content: Text(message),
+        backgroundColor: Colors.grey[900],
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Row(
+          children: [
+            Icon(Icons.error_outline, color: Colors.red[400]),
+            const SizedBox(width: 8),
+            const Text('Error', style: TextStyle(color: Colors.white)),
+          ],
+        ),
+        content: Text(
+          message,
+          style: TextStyle(color: Colors.grey[300]),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('OK'),
+            child: Text('OK', style: TextStyle(color: Colors.blue[400])),
           ),
         ],
+      ),
+    );
+  }
+
+  // Show success snackbar
+  void _showSuccessSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(Icons.check_circle, color: Colors.green[400]),
+            const SizedBox(width: 8),
+            Text(message),
+          ],
+        ),
+        backgroundColor: Colors.green[800],
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
+  }
+
+  // Show validation error snackbar
+  void _showValidationError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(Icons.warning, color: Colors.orange[400]),
+            const SizedBox(width: 8),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        backgroundColor: Colors.orange[800],
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        duration: const Duration(seconds: 4),
       ),
     );
   }
@@ -115,6 +195,7 @@ class _HomeState extends State<Home> {
       isVideoLoaded = false;
       print('Video cleared, isVideoLoaded: $isVideoLoaded');
     });
+    _showSuccessSnackBar('Video cleared');
   }
 
   // Handle endpoint change from navbar
@@ -123,33 +204,64 @@ class _HomeState extends State<Home> {
       apiEndpoint = endpoint;
       print('Endpoint updated from navbar: $apiEndpoint');
     });
+
+    if (endpoint != null && endpoint.isNotEmpty) {
+      _showSuccessSnackBar('API endpoint configured');
+    }
   }
 
-  // Navigate to Analytics
+  // Navigate to Analytics with proper validation
   void _navigateToAnalytics() {
-    print('Navigating - isVideoLoaded: $isVideoLoaded, currentVideoPath: $currentVideoPath, apiEndpoint: $apiEndpoint');
-    if (isVideoLoaded && currentVideoPath != null && apiEndpoint != null) {
-      Navigator.push(
-        context,
-        PageRouteBuilder(
-          settings: const RouteSettings(name: '/analytics'),
-          pageBuilder: (_, __, ___) => Analytics(
-            videoPath: currentVideoPath!,
-            apiEndpoint: apiEndpoint,
-          ),
-          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            return FadeTransition(
-              opacity: animation,
-              child: child,
-            );
-          },
-        ),
-      );
-    } else if (!isVideoLoaded || currentVideoPath == null) {
-      _showErrorDialog('Please load a video before continuing');
-    } else if (apiEndpoint == null) {
-      _showErrorDialog('Please set an API endpoint in the navbar before continuing');
+    print('Attempting navigation - isVideoLoaded: $isVideoLoaded, currentVideoPath: $currentVideoPath, apiEndpoint: $apiEndpoint');
+
+    // Check video requirement
+    if (!isVideoLoaded || currentVideoPath == null || currentVideoPath!.isEmpty) {
+      _showValidationError('Please upload a video file before starting analysis');
+      return;
     }
+
+    // Check API endpoint requirement
+    if (apiEndpoint == null || apiEndpoint!.isEmpty) {
+      _showValidationError('Please set an API endpoint in the navigation bar before starting analysis');
+      return;
+    }
+
+    // Verify video file still exists
+    final file = File(currentVideoPath!);
+    if (!file.existsSync()) {
+      _showValidationError('Video file no longer exists. Please upload a new video');
+      setState(() {
+        currentVideoPath = null;
+        isVideoLoaded = false;
+      });
+      return;
+    }
+
+    // Stop video before navigation
+    _stopVideoPlayback();
+
+    // All validations passed, navigate to analytics
+    print('All validations passed, navigating to Analytics');
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        settings: const RouteSettings(name: '/analytics'),
+        pageBuilder: (_, __, ___) => Analytics(
+          videoPath: currentVideoPath!,
+          apiEndpoint: apiEndpoint,
+        ),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: animation,
+            child: child,
+          );
+        },
+      ),
+    ).then((_) {
+      // Optional: Resume video when returning from Analytics page
+      // Uncomment the next line if you want the video to resume when coming back
+      // if (isVideoLoaded) player.play();
+    });
   }
 
   @override
@@ -202,6 +314,10 @@ class _HomeState extends State<Home> {
                 title: 'TimeClip AI',
                 selectedIndex: selectedIndex,
                 onItemSelected: (index) {
+                  // Stop video when navigating to different sections
+                  if (index != selectedIndex) {
+                    _stopVideoPlayback();
+                  }
                   setState(() {
                     selectedIndex = index;
                   });
@@ -217,7 +333,6 @@ class _HomeState extends State<Home> {
   }
 
   // Build content children (used for both mobile and desktop layouts)
-// Build content children (used for both mobile and desktop layouts)
   List<Widget> _buildContentChildren(
       BuildContext context, Size size, TextScaler textScaler, bool isMobile) {
     return [
@@ -289,6 +404,50 @@ class _HomeState extends State<Home> {
                         color: Colors.grey[400],
                         fontSize: textScaler.scale(isMobile ? 12 : 14),
                         height: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    // Requirements indicator
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: canNavigateToAnalytics
+                            ? Colors.green[900]!.withOpacity(0.3)
+                            : Colors.orange[900]!.withOpacity(0.3),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: canNavigateToAnalytics
+                              ? Colors.green[700]!
+                              : Colors.orange[700]!,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            canNavigateToAnalytics
+                                ? Icons.check_circle
+                                : Icons.info_outline,
+                            color: canNavigateToAnalytics
+                                ? Colors.green[400]
+                                : Colors.orange[400],
+                            size: textScaler.scale(isMobile ? 16 : 18),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              canNavigateToAnalytics
+                                  ? 'Ready to start analysis!'
+                                  : 'Complete setup to continue',
+                              style: TextStyle(
+                                color: canNavigateToAnalytics
+                                    ? Colors.green[400]
+                                    : Colors.orange[400],
+                                fontSize: textScaler.scale(isMobile ? 12 : 14),
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -372,8 +531,7 @@ class _HomeState extends State<Home> {
               SizedBox(height: isMobile ? 16 : 24),
               _buildStatusSection(textScaler, isMobile),
               SizedBox(height: isMobile ? 16 : 24),
-              if (isVideoLoaded && apiEndpoint != null)
-                _buildSubmitButton(isMobile),
+              _buildSubmitButton(isMobile),
             ],
           ),
         ),
@@ -547,54 +705,67 @@ class _HomeState extends State<Home> {
 
   // Build submit button
   Widget _buildSubmitButton(bool isMobile) {
+    final isEnabled = canNavigateToAnalytics;
+
     return Container(
       width: double.infinity,
       height: isMobile ? 45 : 50,
       decoration: BoxDecoration(
-        gradient: LinearGradient(
+        gradient: isEnabled
+            ? LinearGradient(
           colors: [
             Colors.green[400]!,
             Colors.teal[400]!,
           ],
+        )
+            : LinearGradient(
+          colors: [
+            Colors.grey[700]!,
+            Colors.grey[800]!,
+          ],
         ),
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
+        boxShadow: isEnabled
+            ? [
           BoxShadow(
             color: Colors.green.withOpacity(0.3),
             blurRadius: 8,
             offset: const Offset(0, 4),
           ),
-        ],
+        ]
+            : null,
       ),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(12),
-          onTap: _navigateToAnalytics,
+          onTap: isEnabled ? _navigateToAnalytics : null,
           child: Center(
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(
-                  Icons.analytics,
-                  color: Colors.white,
+                  isEnabled ? Icons.analytics : Icons.lock,
+                  color: isEnabled ? Colors.white : Colors.grey[500],
                   size: isMobile ? 18 : 20,
                 ),
                 SizedBox(width: isMobile ? 8 : 12),
                 Text(
-                  'Start Analysis',
+                  isEnabled ? 'Start Analysis' : 'Complete Setup First',
                   style: TextStyle(
-                    color: Colors.white,
+                    color: isEnabled ? Colors.white : Colors.grey[500],
                     fontSize: isMobile ? 14 : 16,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                SizedBox(width: isMobile ? 6 : 8),
-                Icon(
-                  Icons.arrow_forward_rounded,
-                  color: Colors.white,
-                  size: isMobile ? 18 : 20,
-                ),
+                if (isEnabled) ...[
+                  SizedBox(width: isMobile ? 6 : 8),
+                  Icon(
+                    Icons.arrow_forward_rounded,
+                    color: Colors.white,
+                    size: isMobile ? 18 : 20,
+                  ),
+                ],
               ],
             ),
           ),
